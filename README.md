@@ -1,5 +1,5 @@
 # toy_project_system
 
-### Practice 5
+### Practice 6
 
-#### 시그널 구현하기
+#### 타이머 구현하기
