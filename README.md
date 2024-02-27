@@ -1,7 +1,5 @@
 # toy_project_system
 
-### Practice 4
+### Practice 5
 
-#### fork/exec 구현하기
-
-![Practice_4](./img/Practice_4.jpg)
+#### 시그널 구현하기
