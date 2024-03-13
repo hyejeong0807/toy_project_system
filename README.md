@@ -1,5 +1,5 @@
 # toy_project_system
 
-### Practice 6
+### Practice 7
 
-#### 타이머 구현하기
+#### 쓰레드 구현하기

@@ -3,6 +3,8 @@
 #include <signal.h>
 #include <sys/time.h>
 #include <time.h>
+#include <pthread.h>
+#include <assert.h>
 
 #include <system_server.h>
 #include <gui.h>
@@ -26,12 +28,57 @@ int posix_sleep_ms(unsigned int timeout_ms)
     return nanosleep(&sleep_time, NULL);
 }
 
+void *watchdog_thread(void *arg)
+{
+    char *s = arg;
+    printf("%s", s);
+    while (1) {
+        posix_sleep_ms(5000);
+    }
+    return 0;
+}
+
+/*
+    수신받은 센서 데이터를 보여주는 모니터링 쓰레드
+    shared memory를 사용해서 
+*/
+void *monitor_thread(void *arg)
+{
+    char *s = arg;
+    printf("%s", s);
+    while (1) {
+        posix_sleep_ms(5000);
+    }
+    return 0;
+}
+
+void *disk_thread(void *arg)
+{
+    char *s = arg;
+    printf("%s", s);
+    while (1) {
+        posix_sleep_ms(5000);
+    }
+}
+
+void *camera_thread(void *arg)
+{
+    char *s = arg;
+    printf("%s", s);
+    while (1) {
+        posix_sleep_ms(5000);
+    }
+}
+
 int system_server()
 {
     struct itimerval ts;    // 자기가 설정한 시간마다 event가 발생하도록 설정
     struct sigaction sa;
     struct sigevent sev;
     timer_t *tidlist;
+
+    int retcode, status;
+    pthread_t watchdog_thread_tid, monitor_thread_tid, disk_service_thread_tid, camera_service_thread_tid;
 
     printf("나 system_server 프로세스!\n");
 
@@ -52,6 +99,17 @@ int system_server()
         perror("SIGALRM, setitimer");
         exit(1);
     }
+
+    /* Watchdog, Monitor, Disk_service, Camera_service 스레드 생성 */
+    retcode = pthread_create(&watchdog_thread_tid, NULL, watchdog_thread, "watchdog thread\n");
+    assert(retcode == 0);
+    retcode = pthread_create(&monitor_thread_tid, NULL, monitor_thread, "monitor thread\n");
+    assert(retcode == 0);
+    retcode = pthread_create(&disk_service_thread_tid, NULL, disk_thread, "disk thread\n");
+    assert(retcode == 0);
+    retcode = pthread_create(&camera_service_thread_tid, NULL, camera_thread, "camera thread\n");
+    assert(retcode == 0);
+
 
     while (1) {
         posix_sleep_ms(5000);

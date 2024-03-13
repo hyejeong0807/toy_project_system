@@ -6,10 +6,28 @@
 #include <input.h>
 #include <web_server.h>
 
+#include <common_shm.h>
+#include <sensor_info.h>
+
+void sigchld_handler(int sig)
+{
+    int status, saved_errno;
+    pid_t child_pid;
+
+    saved_errno = errno;
+
+    while ((child_pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        printf("SIGCHLD(%d) caught\n", child_pid);
+    }
+
+}
+
 int main()
 {
     pid_t spid, gpid, ipid, wpid;
     int status, savedErrno;
+
+    signal(SIGCHLD, sigchld_handler);
 
     printf("메인 함수입니다.\n");
     printf("시스템 서버를 생성합니다.\n");
