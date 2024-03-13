@@ -14,8 +14,12 @@
 #include <input.h>
 #include <web_server.h>
 
+#define TOY_BUFSIZE 1024
 #define TOY_TOK_BUFSIZE 64
 #define TOY_TOK_DELIM " \t\n\r"
+
+static char global_message[TOY_BUFSIZE];
+static pthread_mutex_t global_message_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct _sig_ucontext {
     unsigned long uc_flags;
@@ -53,15 +57,16 @@ void segfault_handler(int sig_num, siginfo_t *info, void *ucontext) {
 /*
     Command Thread
 */
-
 int toy_send(char **args);
 int toy_shell(char **args);
 int toy_exit(char **args);
+int toy_mutex(char **args);
 
 char *builtin_str[] = {
     "send",
     "sh",
-    "exit"
+    "exit",
+    "mu" // mutex
 };
 
 // function table 정의
@@ -69,12 +74,34 @@ int (*builtin_func[]) (char **) = {
     &toy_send,
     &toy_shell,
     &toy_exit,
+    &toy_mutex
 };
-
 
 int toy_num_builtins()
 {
     return sizeof(builtin_str) / sizeof(char *);
+}
+
+// commnad에서 mu를 입력했을 때는 
+// 센서 스레드에서 글로벌 문자열을 바꾸는 것을 방지하기 위함
+int toy_mutex(char **args)
+{
+    if (args[1] == NULL) {
+        return -1;
+    }
+
+    printf("save message: %d\n", args[1]);
+
+    if (pthread_mutex_lock(&global_message_mutex) != 0) {
+        perror("pthread_mutex_lock Error");
+        exit(-1);
+    }
+    strcpy(global_message, args[1]);
+    if (pthread_mutex_unlock(&global_message_mutex)) {
+        perror("pthread_mutex_unlock error");
+        exit(-1);
+    }
+    return 1;
 }
 
 int toy_send(char **args)
@@ -183,7 +210,6 @@ void toy_loop(void)
     } while(status);
 }
 
-
 void *command_thread(void *arg)
 {
     char *s = arg;
@@ -193,11 +219,30 @@ void *command_thread(void *arg)
     }
 }
 
+/*
+    Sensor thread
+*/
 void *sensor_thread(void *arg)
 {
+    char saved_message[TOY_BUFSIZE];
     char *s = arg;
+    int i = 0;
+
     printf("%s", s);
     while (1) {
+        i = 0;
+        
+        // 뮤텍스 추가
+        // 한 글자씩 출력 후 슬립하는
+        // sensor thread에서 변경시킬 수 있기 때문에 이 부분을 critical section으로 
+        pthread_mutex_lock(&global_message_mutex);
+        while (global_message[i] == NULL) {
+            printf("%c", global_message[i]);
+            fflush(stdout);
+            posix_sleep_ms(500);
+            i++;
+        }
+        pthread_mutex_unlock(&gloabl_message_mutex);
         posix_sleep_ms(5000);
     }
 }
