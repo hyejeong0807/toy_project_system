@@ -10,6 +10,11 @@
 #include <gui.h>
 #include <input.h>
 #include <web_server.h>
+#include <camera_HAL.h>
+
+pthread_mutex_t system_loop_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t system_loop_cond = PTHREAD_COND_INITIALIZER;
+bool system_loop_exit = false;    // true if main loop should exit
 
 static int toy_timer = 0;
 
@@ -17,6 +22,7 @@ static void sigalrm_handler(int sig, siginfo_t *si, void *uc)
 {
     printf("toy timer: %d\n", toy_timer);
     toy_timer++;
+    signal_exit();
 }
 
 int posix_sleep_ms(unsigned int timeout_ms)
@@ -61,13 +67,26 @@ void *disk_thread(void *arg)
     }
 }
 
+// Camera HAL API를 호출하는 쓰레드
 void *camera_thread(void *arg)
 {
     char *s = arg;
     printf("%s", s);
+
+    toy_camera_open();
+    toy_camera_take_picture();
+
     while (1) {
         posix_sleep_ms(5000);
     }
+}
+
+void signal_exit(void)
+{
+    pthread_mutex_lock(&system_loop_mutex);
+    system_loop_exit = true;
+    pthread_cond_signal(&system_loop_cond);
+    pthread_mutex_unlock(&system_loop_mutex);
 }
 
 int system_server()
@@ -110,9 +129,17 @@ int system_server()
     retcode = pthread_create(&camera_service_thread_tid, NULL, camera_thread, "camera thread\n");
     assert(retcode == 0);
 
+    // cond wait으로 대기한다.
+    // 5초 후에 알림이 울리면 <=== system 출력
+    while (system_loop_exit == false ){
+        pthread_mutex_lock(&system_loop_mutex);
+        pthread_cond_wait(&system_loop_cond, &system_loop_mutex);
+        printf("<=== system\n");
+        pthread_mutex_unlock(&system_loop_mutex);
+    }    
 
     while (1) {
-        posix_sleep_ms(5000);
+        sleep(1);
     }
 
     return 0;
