@@ -12,6 +12,8 @@
 #include <web_server.h>
 #include <camera_HAL.h>
 
+#define BUFSIZE 1024
+
 pthread_mutex_t system_loop_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t system_loop_cond = PTHREAD_COND_INITIALIZER;
 bool system_loop_exit = false;    // true if main loop should exit
@@ -62,8 +64,25 @@ void *disk_thread(void *arg)
 {
     char *s = arg;
     printf("%s", s);
+
+    FILE *fd;
+    char buf[BUFSIZE];
+
     while (1) {
-        posix_sleep_ms(5000);
+        /*
+            popen 사용하여 10초마다 disk 잔여량 출력
+            popen으로 받은 fd를 읽어서 출력
+        */
+        if ((fd = popen("df -h ./", "r")) == NULL) {
+            perror("faild to open disk free");
+            exit(-1);
+        }
+
+        while (fgets(buf, BUFSIZE, fd)) {
+            printf("%s", buf);
+        }
+
+        posix_sleep_ms(10000);
     }
 }
 
@@ -129,14 +148,14 @@ int system_server()
     retcode = pthread_create(&camera_service_thread_tid, NULL, camera_thread, "camera thread\n");
     assert(retcode == 0);
 
-    // cond wait으로 대기한다.
-    // 5초 후에 알림이 울리면 <=== system 출력
+    // 주기적으로 system_loop_exit 값을 검사하는 것이 아닌 cond wait으로 대기한다.
+    // 그리고 signal_exit에서 signal을 보내면 즉, 5초 후에 알림이 울리면 "<=== system"을 출력한다.
+    pthread_mutex_lock(&system_loop_mutex);
     while (system_loop_exit == false ){
-        pthread_mutex_lock(&system_loop_mutex);
         pthread_cond_wait(&system_loop_cond, &system_loop_mutex);
-        printf("<=== system\n");
-        pthread_mutex_unlock(&system_loop_mutex);
-    }    
+    }
+    pthread_mutex_unlock(&system_loop_mutex);
+    printf("<=== system\n");
 
     while (1) {
         sleep(1);
