@@ -11,5 +11,20 @@ int create_gui()
 
     printf("여기서 GUI 프로세스를 생성합니다.\n");
 
+    sleep(3);
+
+    switch(systemPid = fork()) {
+    case -1:
+        printf("Error\n");
+        break;
+    case 0:
+        if (execl("/usr/bin/google-chrome-stable", "google-chrome-stable", "http://localhost:8001", NULL)) {
+            printf("Error execl\n");
+        }
+        break;
+    default:
+        break;
+    }
+    
     return 0;
 }
