@@ -13,6 +13,7 @@
 #include <gui.h>
 #include <input.h>
 #include <web_server.h>
+#include <toy_message.h>
 
 #define TOY_BUFSIZE 1024
 #define TOY_TOK_BUFSIZE 64
@@ -66,7 +67,8 @@ char *builtin_str[] = {
     "send",
     "sh",
     "exit",
-    "mu" // mutex
+    "mu", // mutex
+    "mq"  // message queue
 };
 
 // function table 정의
@@ -74,12 +76,33 @@ int (*builtin_func[]) (char **) = {
     &toy_send,
     &toy_shell,
     &toy_exit,
-    &toy_mutex
+    &toy_mutex,
+    &toy_message_queue
 };
 
 int toy_num_builtins()
 {
     return sizeof(builtin_str) / sizeof(char *);
+}
+
+int toy_message_queue(char **args) 
+{
+    int mqretcode;
+    toy_msg_t msg;
+
+    if (args[1] == NULL || args[2] == NULL) {
+        return 1;
+    }
+
+    if (!strcmp(args[1], "camera")) {
+        msg.msg_type = atoi(args[2]);
+        msg.param1 = 0;
+        msg.param2 = 0;
+        mqretcode = mq_send("/camera_queue", (char *)&msg, sizeof(msg), 0);
+        assert(mqretcode == 0);
+    }
+
+    return 1;
 }
 
 // commnad에서 mu를 입력했을 때는 
@@ -214,9 +237,7 @@ void *command_thread(void *arg)
 {
     char *s = arg;
     printf("%s", s);
-    while(1) {
-        posix_sleep_ms(5000);
-    }
+    toy_loop();
 }
 
 /*

@@ -11,6 +11,7 @@
 #include <input.h>
 #include <web_server.h>
 #include <camera_HAL.h>
+#include <toy_message.h>
 
 #define BUFSIZE 1024
 
@@ -19,6 +20,11 @@ pthread_cond_t system_loop_cond = PTHREAD_COND_INITIALIZER;
 bool system_loop_exit = false;    // true if main loop should exit
 
 static int toy_timer = 0;
+
+mqd_t watchdog_queue;
+mqd_t monitor_queue;
+mqd_t disk_queue;
+mqd_t camera_queue;
 
 static void sigalrm_handler(int sig, siginfo_t *si, void *uc)
 {
@@ -39,10 +45,22 @@ int posix_sleep_ms(unsigned int timeout_ms)
 void *watchdog_thread(void *arg)
 {
     char *s = arg;
+    ssize_t numRead;
+    toy_msg_t msg;
+    unsigned int prio;
+    
     printf("%s", s);
+
     while (1) {
-        posix_sleep_ms(5000);
+        numRead = mq_receive(watchdog_queue, (char *)&msg, sizeof(msg), &prio);
+        assert(numRead > 0);
+        printf("watchdog_thread: 메시지 수신 받음\n");
+        printf("Read %ld bytes: priority = %u\n", (long)numRead, prio);
+        printf("msg.type: %d\n", msg.msg_type);
+        printf("msg.param1: %d\n", msg.param1);
+        printf("msg.param2: %d\n", msg.param2);
     }
+
     return 0;
 }
 
@@ -53,22 +71,45 @@ void *watchdog_thread(void *arg)
 void *monitor_thread(void *arg)
 {
     char *s = arg;
+    ssize_t numRead;
+    mqd_t mqd;
+    toy_msg_t msg;
+    unsigned int prio;
+
     printf("%s", s);
+    mqd = mq_open("/monitor_queue", O_RDWR);
     while (1) {
-        posix_sleep_ms(5000);
+        numRead = mq_receive(mqd, (char *)&msg, sizeof(msg), &prio);
+        assert(numRead > 0);
+        printf("monitor_thread: 메시지 수신 받음\n");
+        printf("Read %ld bytes: prioity = %u\n", (long)numRead, prio);
+        printf("msg.type: %d\n", msg.msg_type);
+        printf("msg.param1: %d\n", msg.param1);
+        printf("msg.param2: %d\n", msg.param2);
     }
+
     return 0;
 }
 
 void *disk_thread(void *arg)
 {
     char *s = arg;
+    ssize_t numRead;
+    unsigned int prio;
+    toy_msg_t msg;
     printf("%s", s);
 
     FILE *fd;
     char buf[BUFSIZE];
 
     while (1) {
+        numRead = mq_receive(disk_queue, (char *)&msg, sizeof(toy_msg_t), &prio);
+        assert(numRead > 0);
+        printf("disk_thread: 메시지 수신 받음\n");
+        printf("Read %ld bytes: prioity = %u\n", (long)numRead, prio);
+        printf("msg.type: %d\n", msg.msg_type);
+        printf("msg.param1: %d\n", msg.param1);
+        printf("msg.param2: %d\n", msg.param2);
         /*
             popen 사용하여 10초마다 disk 잔여량 출력
             popen으로 받은 fd를 읽어서 출력
@@ -86,17 +127,33 @@ void *disk_thread(void *arg)
     }
 }
 
+
+#define CAMERA_TAKE_PICTURE 1
+
 // Camera HAL API를 호출하는 쓰레드
 void *camera_thread(void *arg)
 {
     char *s = arg;
+    toy_msg_t msg;
+    ssize_t numRead;
+    unsigned int prio;
+
     printf("%s", s);
 
     toy_camera_open();
-    toy_camera_take_picture();
 
     while (1) {
-        posix_sleep_ms(5000);
+        numRead = mq_receive(camera_queue, (char *)&msg, sizeof(toy_msg_t), &prio);
+        assert(numRead > 0);
+        printf("camera_thread: 메시지 수신 받음\n");
+        printf("Read %ld bytes: prioity = %u\n", (long)numRead, prio);
+        printf("msg.type: %d\n", msg.msg_type);
+        printf("msg.param1: %d\n", msg.param1);
+        printf("msg.param2: %d\n", msg.param2);
+
+        if (msg.msg_type == CAMERA_TAKE_PICTURE) {
+            toy_camera_take_picture();
+        }
     }
 }
 
@@ -156,6 +213,31 @@ int system_server()
     }
     pthread_mutex_unlock(&system_loop_mutex);
     printf("<=== system\n");
+
+    // 메시지 큐 open
+    watchdog_queue = mq_open("/watchdog_queue", O_RDWR);
+    if (watchdog_queue == (mqd_t)-1){
+        perror("watchdog_queue open failure");
+        exit(-1);
+    }
+
+    monitor_queue = mq_open("/monitor_queue", O_RDWR);
+    if (monitor_queue == (mqd_t)-1){
+        perror("monitor_queue open failure");
+        exit(-1);
+    }
+
+    disk_queue = mq_open("/disk_queue", O_RDWR);
+    if (mqd == (mqd_t)-1){
+        perror("disk_queue open failure");
+        exit(-1);
+    }
+
+    camera_queue = mq_open("/camera_queue", O_RDWR);
+    if (camera_queue == (mqd_t)-1){
+        perror("camera_queue open failure");
+        exit(-1);
+    }
 
     while (1) {
         sleep(1);
