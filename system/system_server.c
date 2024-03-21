@@ -5,6 +5,7 @@
 #include <time.h>
 #include <pthread.h>
 #include <assert.h>
+#include <semaphore.h>
 
 #include <system_server.h>
 #include <gui.h>
@@ -20,6 +21,10 @@ pthread_mutex_t system_loop_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t system_loop_cond = PTHREAD_COND_INITIALIZER;
 bool system_loop_exit = false;    // true if main loop should exit
 
+static bool global_timer_stopped;
+sem_t global_timer_sem;
+pthread_mutex_t toy_timer_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 static int toy_timer = 0;
 static shm_sensor_t *bmp_shm_msg;
 
@@ -28,11 +33,28 @@ mqd_t monitor_queue;
 mqd_t disk_queue;
 mqd_t camera_queue;
 
+static void timer_expire_signal_handler()
+{
+    // signal 문맥에서는 비동기 시그널 안전 함수 사용 => 인터럽트된 코드를 간섭하지 않는 것이 보장되는 연산을 의미한다.
+    // 세마포어는 사용 가능한 함수이다.
+    sem_post(&global_timer_sem);
+}
+
+static void system_timeout_handler()
+{
+    pthread_mutex_lock(&toy_timer_mutex);
+    printf("toy timer: %d\n", toy_timer);
+    toy_timer++;
+    pthread_mutex_unlock(&toy_timer_mutex);
+}
+
 static void sigalrm_handler(int sig, siginfo_t *si, void *uc)
 {
+    pthread_mutex_lock(&toy_timer_mutex);
     printf("toy timer: %d\n", toy_timer);
     toy_timer++;
     signal_exit();
+    pthread_mutex_unlock(&toy_timer_mutex);
 }
 
 int posix_sleep_ms(unsigned int timeout_ms)
@@ -42,6 +64,34 @@ int posix_sleep_ms(unsigned int timeout_ms)
     sleep_time.tv_nsec = (timeout_ms % MILLISEC_PER_SECOND) * (NANOSEC_PER_USEC * USEC_PER_MILLISEC);
 
     return nanosleep(&sleep_time, NULL);
+}
+
+void set_periodic_timer(long sec_delay, long usec_delay)
+{
+    struct itimerval itimer_val = {
+        .it_interval = {.tv_sec = sec_delay, .tv_usec=usec_delay},
+        .it_value = {.tv_sec = sec_delay, .tv_usec=usec_delay}
+    };
+
+    setitimer(ITIMER_REAL, &itimer_val, (struct itimerval*)0);
+}
+
+void *timer_thread(void *arg)
+{
+    int retcode;
+    signal(SIGALRM, timer_expire_signal_handler);
+    set_periodic_timer(1, 1);  // 1초마다 signal이 생성 SIGALRM 시그널이 호출되면 handler 함수에서 세마포어 post
+
+    while (!global_timer_stopped) {
+        retcode = sem_wait(&global_timer_sem);
+
+        // 세마포어가 post되어 해당 쓰레드를 깨웠으면
+        // 시스템 타임아웃 핸들러를 수행한다.
+        system_timeout_handler();
+        break;
+    }
+
+    exit(EXIT_SUCCESS);
 }
 
 void *watchdog_thread(void *arg)
@@ -147,7 +197,6 @@ void *disk_thread(void *arg)
     }
 }
 
-
 #define CAMERA_TAKE_PICTURE 1
 
 // Camera HAL API를 호출하는 쓰레드
@@ -194,26 +243,27 @@ int system_server()
 
     int retcode, status;
     pthread_t watchdog_thread_tid, monitor_thread_tid, disk_service_thread_tid, camera_service_thread_tid;
+    pthread_t timer_thread_tid;
 
     printf("나 system_server 프로세스!\n");
 
     /* 5초 타이머 만들기 */
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    sa.sa_handler = sigalrm_handler;
-    if (sigaction(SIGALRM, &sa, NULL) == -1){
-        perror("SIGALRM, error");
-        exit(1);
-    }
+    // sigemptyset(&sa.sa_mask);
+    // sa.sa_flags = 0;
+    // sa.sa_handler = sigalrm_handler;
+    // if (sigaction(SIGALRM, &sa, NULL) == -1){
+    //     perror("SIGALRM, error");
+    //     exit(1);
+    // }
 
-    ts.it_value.tv_sec = 1;
-    ts.it_value.tv_usec = 0;
-    ts.it_interval.tv_sec = 5;
-    ts.it_interval.tv_usec = 0;
-    if (setitimer(ITIMER_REAL, &ts, NULL) == -1) {
-        perror("SIGALRM, setitimer");
-        exit(1);
-    }
+    // ts.it_value.tv_sec = 1;
+    // ts.it_value.tv_usec = 0;
+    // ts.it_interval.tv_sec = 5;
+    // ts.it_interval.tv_usec = 0;
+    // if (setitimer(ITIMER_REAL, &ts, NULL) == -1) {
+    //     perror("SIGALRM, setitimer");
+    //     exit(1);
+    // }
 
     /* Watchdog, Monitor, Disk_service, Camera_service 스레드 생성 */
     retcode = pthread_create(&watchdog_thread_tid, NULL, watchdog_thread, "watchdog thread\n");
@@ -225,14 +275,18 @@ int system_server()
     retcode = pthread_create(&camera_service_thread_tid, NULL, camera_thread, "camera thread\n");
     assert(retcode == 0);
 
+    // Timer thread 생성
+    retcode = pthread_create(&timer_thread_tid, NULL, timer_thread, "timer thread\n");
+    assert(retcode == 0);
+
     // 주기적으로 system_loop_exit 값을 검사하는 것이 아닌 cond wait으로 대기한다.
     // 그리고 signal_exit에서 signal을 보내면 즉, 5초 후에 알림이 울리면 "<=== system"을 출력한다.
-    pthread_mutex_lock(&system_loop_mutex);
-    while (system_loop_exit == false ){
-        pthread_cond_wait(&system_loop_cond, &system_loop_mutex);
-    }
-    pthread_mutex_unlock(&system_loop_mutex);
-    printf("<=== system\n");
+    // pthread_mutex_lock(&system_loop_mutex);
+    // while (system_loop_exit == false ){
+    //     pthread_cond_wait(&system_loop_cond, &system_loop_mutex);
+    // }
+    // pthread_mutex_unlock(&system_loop_mutex);
+    // printf("<=== system\n");
 
     // 메시지 큐 open
     watchdog_queue = mq_open("/watchdog_queue", O_RDWR);
