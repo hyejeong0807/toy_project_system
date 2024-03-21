@@ -84,13 +84,15 @@ int toy_shell(char **args);
 int toy_exit(char **args);
 int toy_mutex(char **args);
 int toy_message_queue(char **args);
+int toy_elf(char **args);
 
 char *builtin_str[] = {
     "send",
     "sh",
     "exit",
-    "mu", // mutex
-    "mq"  // message queue
+    "mu",  // mutex
+    "mq",  // message queue
+    "elf"
 };
 
 // function table 정의
@@ -99,12 +101,52 @@ int (*builtin_func[]) (char **) = {
     &toy_shell,
     &toy_exit,
     &toy_mutex,
-    &toy_message_queue
+    &toy_message_queue,
+    &toy_elf
 };
 
 int toy_num_builtins()
 {
     return sizeof(builtin_str) / sizeof(char *);
+}
+
+int toy_elf(char **args)
+{
+    int mqretcode;
+    toy_msg_t msg;
+    int fd;
+    struct stat st;
+    char *contents = NULL;
+    size_t contents_sz;
+    Elf64Hdr *map;
+
+    fd = open("./sample/sample.elf", O_RDONLY);
+    if (fd < 0) {
+        printf("fail to open sample.elf\n");
+        return -1;
+    }
+
+    if (!fstat(fd, &st)) {
+        contents_sz = st.st_size;
+        if (!contents_sz) {
+            printf("Empty ELF file\n");
+            close(fd);
+            return -1;
+        }
+
+        printf("====================================\n");
+        printf("File size: %ld\n", contents_sz);
+        map = (Elf64Hdr *)mmap(NULL, contents_sz, PROT_READ, MAP_PRIVATE, fd, 0);
+        printf("Object file type: %d\n", map->e_type);
+        printf("Architecture: %d\n", map->e_machine);
+        printf("Object file version: %d\n", map->e_version);
+        printf("Entry point virtual address: %ld\n", map->e_entry);
+        printf("Program header table file offset: %ld\n", map->e_phoff);
+        printf("====================================\n");
+        munmap(map, contents_sz);
+    }
+
+    return 0;
 }
 
 int toy_message_queue(char **args) 
@@ -324,20 +366,6 @@ int input()
         exit(EXIT_FAILURE);
     }
 
-    /* 
-    *    센서 정보를 공유하기 위한 System V 메모리를 생성
-    */
-    // shm_id[BMP280 - SHM_KEY_BASE] = shmget(BMP280, sizeof(shm_sensor_t), IPC_CREAT | 0666);
-    // if (shm_id[0] == -1) {
-    //     perror("shmget");
-    //     exit(EXIT_FAILURE);
-    // }
-
-    // bmp_shm_msg = (shm_sensor_t *)shmat(shm_id[0], NULL, 0);
-    // if (bmp_shm_msg == (void *)-1) {
-    //     perror("shmat");
-    //     exit(EXIT_FAILURE);
-    // }
     /* 센서 정보를 공유하기 위한, 시스템 V 공유 메모리를 생성한다 */
     bmp_shm_msg = (shm_sensor_t *)toy_shm_create(SHM_KEY_SENSOR, sizeof(shm_sensor_t));
     if ( bmp_shm_msg == (void *)-1 ) {

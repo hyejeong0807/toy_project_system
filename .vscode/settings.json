@@ -1,5 +1,19 @@
 {
     "files.associations": {
-        "system_server.h": "c"
-    }
+        "unistd.h": "c",
+        "system_server.h": "c",
+        "input.h": "c",
+        "stdio.h": "c",
+        "iostream": "cpp",
+        "thread": "c",
+        "shared_memory.h": "c",
+        "array": "c",
+        "string_view": "c",
+        "initializer_list": "c",
+        "utility": "c",
+        "stdint.h": "c",
+        "web_server.h": "c",
+        "sensor_info.h": "c"
+    },
+    "C_Cpp.errorSquiggles": "Disabled"
 }
