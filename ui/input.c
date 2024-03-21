@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
+#include <sys/shm.h>    // shmget
 #include <execinfo.h>
 #include <signal.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@
 #include <input.h>
 #include <web_server.h>
 #include <toy_message.h>
+#include <shared_memory.h>
 
 #define TOY_BUFSIZE 1024
 #define TOY_TOK_BUFSIZE 64
@@ -21,6 +23,10 @@
 
 static char global_message[TOY_BUFSIZE];
 static pthread_mutex_t global_message_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static shm_sensor_t *bmp_shm_msg; 
+static int bmp_shm_fd;
+int shm_id[SHM_KEY_MAX - SHM_KEY_BASE];
 
 typedef struct _sig_ucontext {
     unsigned long uc_flags;
@@ -248,24 +254,43 @@ void *sensor_thread(void *arg)
     char saved_message[TOY_BUFSIZE];
     char *s = arg;
     int i = 0;
+    toy_msg_t msg;
+    shm_sensor_t shmsg;
 
     printf("%s", s);
+
     while (1) {
-        i = 0;
+        posix_sleep_ms(5000);
+
+        // 현재 고도/기압/온도 정보를 시스템 V 공유 메모리에 저장 후 
+        // 모니터 스레드에 메시지를 전송한다.
+        shmsg.temp = 22;
+        shmsg.press = 1;
+        shmsg.humidity = 62;
         
+        memcpy(bmp_shm_msg, &shmsg, sizeof(shm_sensor_t));
+
+        msg.msg_type = 1;  // SENSOR DATA
+        msg.param1 = shm_id[0];  // shm id
+        msg.param2 = 0;
+        mqretcode = mq_send(monitor_queue, (char *)&msg, sizeof(msg), 0);
+        assert(mqretcode == 0);
+
         // 뮤텍스 추가
         // 한 글자씩 출력 후 슬립하는
         // sensor thread에서 변경시킬 수 있기 때문에 이 부분을 critical section으로 
-        pthread_mutex_lock(&global_message_mutex);
-        while (global_message[i] == NULL) {
-            printf("%c", global_message[i]);
-            fflush(stdout);
-            posix_sleep_ms(500);
-            i++;
-        }
-        pthread_mutex_unlock(&gloabl_message_mutex);
-        posix_sleep_ms(5000);
+        // i = 0;
+        // pthread_mutex_lock(&global_message_mutex);
+        // while (global_message[i] == NULL) {
+        //     printf("%c", global_message[i]);
+        //     fflush(stdout);
+        //     posix_sleep_ms(500);
+        //     i++;
+        // }
+        // pthread_mutex_unlock(&gloabl_message_mutex);
     }
+
+    return 0;
 }
 
 // lab 9: 토이 생산자,소비자 실습
@@ -342,16 +367,31 @@ int input()
     assert(retcode == 0);
 
     /* producer - consumer 실습 */
-    pthread_mutex_lock(&global_message_mutex);
-    strcpy(global_message, "hello world!");
-    buflen = strlen(global_message);
-    pthread_mutex_unlock(&global_message_mutex);
-    pthread_create(&thread[0], NULL, (void *)toy_consumer, &thread_id[0]);
-    pthread_create(&thread[1], NULL, (void *)toy_producer, &thread_id[1]);
-    pthread_create(&thread[2], NULL, (void *)toy_producer, &thread_id[2]);
+    // pthread_mutex_lock(&global_message_mutex);
+    // strcpy(global_message, "hello world!");
+    // buflen = strlen(global_message);
+    // pthread_mutex_unlock(&global_message_mutex);
+    // pthread_create(&thread[0], NULL, (void *)toy_consumer, &thread_id[0]);
+    // pthread_create(&thread[1], NULL, (void *)toy_producer, &thread_id[1]);
+    // pthread_create(&thread[2], NULL, (void *)toy_producer, &thread_id[2]);
 
-    for (i = 0; i < NUMTHREAD; i++) {
-        pthread_join(thread[i], NULL);
+    // for (i = 0; i < NUMTHREAD; i++) {
+    //     pthread_join(thread[i], NULL);
+    // }
+
+    /* 
+    *    센서 정보를 공유하기 위한 System V 메모리를 생성
+    */
+    shm_id[BMP280 - SHM_KEY_BASE] = shmget(BMP280, sizeof(shm_sensor_t), IPC_CREATE | 0666);
+    if (shm_id[0] == -1) {
+        perror("shmget");
+        exit(EXIT_FAILURE);
+    }
+
+    bmp_shm_msg = (shm_sensor_t *)shmat(shm_id[0], NULL, 0);
+    if (bmp_shm_msg == (void *)-1) {
+        perror("shmat");
+        exit(EXIT_FAILURE);
     }
 
     while (1) {

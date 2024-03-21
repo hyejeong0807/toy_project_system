@@ -12,6 +12,7 @@
 #include <web_server.h>
 #include <camera_HAL.h>
 #include <toy_message.h>
+#include <sensor_info.h>
 
 #define BUFSIZE 1024
 
@@ -20,6 +21,7 @@ pthread_cond_t system_loop_cond = PTHREAD_COND_INITIALIZER;
 bool system_loop_exit = false;    // true if main loop should exit
 
 static int toy_timer = 0;
+static shm_sensor_t *bmp_shm_msg;
 
 mqd_t watchdog_queue;
 mqd_t monitor_queue;
@@ -68,24 +70,42 @@ void *watchdog_thread(void *arg)
     수신받은 센서 데이터를 보여주는 모니터링 쓰레드
     shared memory를 사용해서 
 */
+
+#define SENSOR_DATA 1
+
 void *monitor_thread(void *arg)
 {
     char *s = arg;
     ssize_t numRead;
     mqd_t mqd;
     toy_msg_t msg;
+    shm_sensor_t shmsg;
     unsigned int prio;
+    int shmid; // 공유 메모리 식별자
 
     printf("%s", s);
-    mqd = mq_open("/monitor_queue", O_RDWR);
     while (1) {
-        numRead = mq_receive(mqd, (char *)&msg, sizeof(msg), &prio);
+        numRead = mq_receive(monitor_queue, (char *)&msg, sizeof(msg), &prio);
         assert(numRead > 0);
         printf("monitor_thread: 메시지 수신 받음\n");
         printf("Read %ld bytes: prioity = %u\n", (long)numRead, prio);
         printf("msg.type: %d\n", msg.msg_type);
         printf("msg.param1: %d\n", msg.param1);
         printf("msg.param2: %d\n", msg.param2);
+        if (msg.msg_type == SENSOR_DATA) {
+            shmid = msg.param1;
+            if (bmp_shm_msg == NULL) 
+                bmp_shm_msg = (shm_sensor_t *)shmat(shmid, NULL, 0); // 이미 존재하는 메모리를 참조하기 때문에 0
+            if (bmp_shm_msg == (void *)-1) {
+                perror("shmat");
+            }
+            
+            shmsg = *bmp_shm_msg;
+            
+            printf("sensor temp: %d\n", bmp_shm_msg->temp);
+            printf("sensor press: %d\n", bmp_shm_msg->press);
+            printf("sensor humidity: %d\n", bmp_shm_msg->humidity);
+        }
     }
 
     return 0;
