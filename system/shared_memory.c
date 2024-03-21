@@ -1,16 +1,25 @@
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/shm.h>
-#include <errno.h>
+#include <string.h>
 
 #include <shared_memory.h>
 
 #define ERROR_CHECK(x, y, z) if ((x) == (-1)) { perror(y); return z; }
 
+int shm_id[SHM_KEY_MAX - SHM_KEY_BASE];
+
+// POSIX shared memory
 int create_shm(const char *shm_name)
 {
     int fd;
 
-    fd = shm_open(shm_name, O_RDWR | O_CREAT | O_EXCL, 0644);
+    fd = shm_open(shm_name, O_RDWR | O_CREAT | O_EXCL, 0666);
     ERROR_CHECK(fd, "shm_open()", -1);
 
     return fd;
@@ -20,5 +29,75 @@ int open_shm(const char *shm_name)
 {
     int fd;
 
-    
+    fd = shm_open(shm_name, O_RDWR, 0666);
+    ERROR_CHECK(fd, "shm_open()", -1);
+
+    return fd;
+}
+
+void close_shm(int fd) 
+{
+    close(fd);
+}
+
+void *toy_shm_create(int key, int size)
+{
+    printf("%s line %d-> key: %d, size:%d\n", __func__, __LINE__, key, size);
+
+    if (key < SHM_KEY_BASE || key >= SHM_KEY_MAX || size <= 0) {
+        printf("%s invalid argument-> key: %d, size: %d\n", __func__, key, size);
+        return (void *)-1;
+    }
+
+    int key_offset = key - SHM_KEY_BASE;
+    shm_id[key_offset] = shmget((key_t)key, size, 0666 | IPC_CREAT);
+
+    if (shm_id[key_offset] == -1) {
+		printf("shmget error: %d, %s\n", errno, strerror(errno));
+		return (void *)-1;
+	}
+
+	void *ptr;
+	ptr = toy_shm_attach(shm_id[key_offset]);
+	if (ptr == (void *)-1) {
+		printf("shm_attach error\n");
+		return (void *)-1;
+	}
+	return ptr;
+}
+
+int toy_shm_get_keyid(int key)
+{
+	if (key < SHM_KEY_BASE || key >= SHM_KEY_MAX) {
+		printf("%s invalid argument-> key: %d\n", __func__, key);
+		return -1;
+	}
+	return shm_id[key - SHM_KEY_BASE];
+}
+
+void *toy_shm_attach(int shmid)
+{
+	void *ptr;
+	if (shmid < 0) {
+		return (void *)-1;
+	}
+	ptr = shmat(shmid, (void *)0, 0);
+	if (ptr == (void *)-1) {
+		printf("shmat error: %d, %s\n", errno, strerror(errno));
+		return (void *)-1;
+	}
+	return ptr;
+}
+
+int toy_shm_detach(void *ptr)
+{
+	int ret;
+	if (ptr == NULL) {
+		return -1;
+	}
+	ret = shmdt((const void *)ptr);
+	if (ret < 0) {
+		printf("shmdt error: %d, %s\n", errno, strerror(errno));
+	}
+	return ret;
 }

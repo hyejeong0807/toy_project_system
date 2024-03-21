@@ -1,6 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/shm.h>    // shmget
 #include <execinfo.h>
 #include <signal.h>
 #include <stdio.h>
@@ -8,12 +13,18 @@
 #include <ucontext.h>
 #include <unistd.h>
 #include <time.h>
+#include <pthread.h>
+#include <assert.h>
+#include <fcntl.h>
+#include <mqueue.h>
 
 #include <system_server.h>
 #include <gui.h>
 #include <input.h>
 #include <web_server.h>
 #include <toy_message.h>
+#include <shared_memory.h>
+#include <sensor_info.h>
 
 #define TOY_BUFSIZE 1024
 #define TOY_TOK_BUFSIZE 64
@@ -22,6 +33,8 @@
 static char global_message[TOY_BUFSIZE];
 static pthread_mutex_t global_message_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static int bmp_shm_fd;
+
 typedef struct _sig_ucontext {
     unsigned long uc_flags;
     struct ucontext *uc_link;
@@ -29,6 +42,14 @@ typedef struct _sig_ucontext {
     struct sigcontext uc_mcontext;
     sigset_t uc_sigmask;
 } sig_ucontext_t;
+
+static mqd_t watchdog_queue;
+static mqd_t monitor_queue;
+static mqd_t disk_queue;
+static mqd_t camera_queue;
+static shm_sensor_t *bmp_shm_msg = NULL; 
+
+static int mqretcode;
 
 void segfault_handler(int sig_num, siginfo_t *info, void *ucontext) {
     void *array[50];
@@ -62,6 +83,7 @@ int toy_send(char **args);
 int toy_shell(char **args);
 int toy_exit(char **args);
 int toy_mutex(char **args);
+int toy_message_queue(char **args);
 
 char *builtin_str[] = {
     "send",
@@ -98,7 +120,7 @@ int toy_message_queue(char **args)
         msg.msg_type = atoi(args[2]);
         msg.param1 = 0;
         msg.param2 = 0;
-        mqretcode = mq_send("/camera_queue", (char *)&msg, sizeof(msg), 0);
+        mqretcode = mq_send(camera_queue, (char *)&msg, sizeof(msg), 0);
         assert(mqretcode == 0);
     }
 
@@ -113,7 +135,7 @@ int toy_mutex(char **args)
         return -1;
     }
 
-    printf("save message: %d\n", args[1]);
+    printf("save message: %s\n", args[1]);
 
     if (pthread_mutex_lock(&global_message_mutex) != 0) {
         perror("pthread_mutex_lock Error");
@@ -163,9 +185,25 @@ int toy_exit(char **args)
     exit(0);
 }
 
-char **toy_split_line(char *args)
+char *toy_read_line(void)
 {
-    int buf_size = TOY_TOK_BUFSIZE, position = 0;
+    char *line = NULL;
+    ssize_t bufsize = 0;
+
+    if (getline(&line, &bufsize, stdin) == -1) {
+        if (feof(stdin)) {
+            exit(EXIT_SUCCESS);
+        } else {
+            perror(": getline\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    return line;
+}
+
+char **toy_split_line(char *line)
+{
+    int bufsize = TOY_TOK_BUFSIZE, position = 0;
     char **tokens = malloc(bufsize * sizeof(char *));
     char *token, **tokens_backup;
 
@@ -174,21 +212,22 @@ char **toy_split_line(char *args)
         exit(EXIT_FAILURE);
     }
 
-    token = strtok(args, TOY_TOK_DELIM);
+    token = strtok(line, TOY_TOK_DELIM);
     while (token != NULL) {
         tokens[position] = token;
         position++;
 
-        if (position >= buf_size) {
-            buf_size += TOY_TOK_BUFSIZE;
+        if (position >= bufsize) {
+            bufsize += TOY_TOK_BUFSIZE;
             tokens_backup = tokens;
-            tokens = realloc(tokens, buf_size * sizeof(char *));
+            tokens = realloc(tokens, bufsize * sizeof(char *));
             if (!tokens) {
                 free(tokens_backup);
-                perror("fail to realloc for args buffer");
-                exit(1);
+                fprintf(stderr, "toy: allocation error\n");
+                exit(EXIT_FAILURE);
             }
         }
+
         token = strtok(NULL, TOY_TOK_DELIM);
     }
     tokens[position] = NULL;
@@ -214,23 +253,15 @@ void toy_loop(void)
     char *line;
     char **args;
     int status;
-    site_t len = 0;
 
     do {
-        printf("TOY> ");
-        if (getline(&line, &len, stdin) < 0) {
-            perror("Fail to read from stdin");
-            exit(1);
-        }
-        if (strcmp(line, "\n") == 0) continue;
-
-        // 받아온 문자열 (명령어)을 token으로 분리해서 가져온다.
+        printf("TOY>");
+        line = toy_read_line();
         args = toy_split_line(line);
         status = toy_execute(args);
-
         free(line);
         free(args);
-    } while(status);
+    } while (status);
 }
 
 void *command_thread(void *arg)
@@ -238,6 +269,7 @@ void *command_thread(void *arg)
     char *s = arg;
     printf("%s", s);
     toy_loop();
+    return 0;
 }
 
 /*
@@ -245,72 +277,32 @@ void *command_thread(void *arg)
 */
 void *sensor_thread(void *arg)
 {
-    char saved_message[TOY_BUFSIZE];
     char *s = arg;
     int i = 0;
+    toy_msg_t msg;
+    int shmid = toy_shm_get_keyid(SHM_KEY_SENSOR);
 
     printf("%s", s);
+
     while (1) {
-        i = 0;
-        
-        // 뮤텍스 추가
-        // 한 글자씩 출력 후 슬립하는
-        // sensor thread에서 변경시킬 수 있기 때문에 이 부분을 critical section으로 
-        pthread_mutex_lock(&global_message_mutex);
-        while (global_message[i] == NULL) {
-            printf("%c", global_message[i]);
-            fflush(stdout);
-            posix_sleep_ms(500);
-            i++;
-        }
-        pthread_mutex_unlock(&gloabl_message_mutex);
         posix_sleep_ms(5000);
+
+        // 현재 고도/기압/온도 정보를 시스템 V 공유 메모리에 저장 후 
+        // 모니터 스레드에 메시지를 전송한다.
+        if (bmp_shm_msg != NULL) {
+            bmp_shm_msg->temp = 22;
+            bmp_shm_msg->press = 1;
+            bmp_shm_msg->humidity = 62;
+        }
+
+        msg.msg_type = 1;    // SENSOR DATA
+        msg.param1 = shmid;  // shm id
+        msg.param2 = 0;
+        mqretcode = mq_send(monitor_queue, (char *)&msg, sizeof(msg), 0);
+        assert(mqretcode == 0);
     }
-}
 
-// lab 9: 토이 생산자,소비자 실습
-#define MAX 30
-#define NUMTHREAD 3 /* number of threads */
-
-char buffer[TOY_BUFSIZE];
-// 버퍼를 포인팅하는 변수
-int read_count = 0, write_count = 0;
-int buflen;
-pthread_mutex_t count_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t empty = PTHREAD_COND_INITIALIZER;
-int thread_id[NUMTHREAD] = {0, 1, 2};
-int producer_count = 0, consumer_count = 0;
-
-void *toy_consumer(int *id)
-{
-    pthread_mutex_lock(&count_mutex);
-    while (consumer_count < MAX) {
-        pthread_cond_wait(&empty, &count_mutex);
-        // queue에서 하나 꺼낸다.
-        printf("                           소비자 [%d]: %c\n", *id, buffer[read_count]);
-        read_count = (read_count + 1) % TOY_BUFSIZE;
-        fflush(stdout);
-        consumer_count++;
-    }
-    pthread_mutex_unlock(&count_mutex);
-}
-
-void *toy_producer(int *id)
-{
-    while (producer_count < MAX) {
-        pthread_mutex_lock(&count_mutex);
-        strcpy(buffer,"");
-        // global message를 가져온다.
-        buffer[write_count] = global_message[write_count % buffer];
-        // 큐에 추가한다
-        printf("%d - 생산자[%d]: %c \n", producer_count, *id, buffer[write_count]);
-        fflush(stdout);
-        write_count = (write_count + 1) 5 TOY_BUFSIZE;
-        producer_count++;
-        pthread_cond_signal(&empty);
-        pthread_mutex_unlock(&count_mutex);
-        sleep(rand() % 3);
-    }
+    return 0;
 }
 
 int input()
@@ -318,8 +310,6 @@ int input()
     int retcode;
     int i;
     pthread_t command_thread_tid, sensor_thread_tid;
-
-    pthread_t threadp[NUMTHREAD];
 
     printf("나 input 프로세스!\n");
 
@@ -334,25 +324,43 @@ int input()
         exit(EXIT_FAILURE);
     }
 
+    /* 
+    *    센서 정보를 공유하기 위한 System V 메모리를 생성
+    */
+    // shm_id[BMP280 - SHM_KEY_BASE] = shmget(BMP280, sizeof(shm_sensor_t), IPC_CREAT | 0666);
+    // if (shm_id[0] == -1) {
+    //     perror("shmget");
+    //     exit(EXIT_FAILURE);
+    // }
+
+    // bmp_shm_msg = (shm_sensor_t *)shmat(shm_id[0], NULL, 0);
+    // if (bmp_shm_msg == (void *)-1) {
+    //     perror("shmat");
+    //     exit(EXIT_FAILURE);
+    // }
+    /* 센서 정보를 공유하기 위한, 시스템 V 공유 메모리를 생성한다 */
+    bmp_shm_msg = (shm_sensor_t *)toy_shm_create(SHM_KEY_SENSOR, sizeof(shm_sensor_t));
+    if ( bmp_shm_msg == (void *)-1 ) {
+        bmp_shm_msg = NULL;
+        printf("Error in shm_create SHMID=%d SHM_KEY_SENSOR\n", SHM_KEY_SENSOR);
+    }
+
+    // 메시지 큐 open
+    watchdog_queue = mq_open("/watchdog_queue", O_RDWR);
+    assert(watchdog_queue != -1);
+    monitor_queue = mq_open("/monitor_queue", O_RDWR);
+    assert(monitor_queue != -1);
+    disk_queue = mq_open("/disk_queue", O_RDWR);
+    assert(disk_queue != -1);
+    camera_queue = mq_open("/camera_queue", O_RDWR);
+    assert(camera_queue != -1);
+
     // command, sensor 쓰레드 생성
     // 여기서 command 쓰레드는 toy_loop 함수를 호출한다.
     retcode = pthread_create(&command_thread_tid, NULL, command_thread, "command thread\n");
     assert(retcode == 0);
     retcode = pthread_create(&sensor_thread_tid, NULL, sensor_thread, "sensor thread\n");
     assert(retcode == 0);
-
-    /* producer - consumer 실습 */
-    pthread_mutex_lock(&global_message_mutex);
-    strcpy(global_message, "hello world!");
-    buflen = strlen(global_message);
-    pthread_mutex_unlock(&global_message_mutex);
-    pthread_create(&thread[0], NULL, (void *)toy_consumer, &thread_id[0]);
-    pthread_create(&thread[1], NULL, (void *)toy_producer, &thread_id[1]);
-    pthread_create(&thread[2], NULL, (void *)toy_producer, &thread_id[2]);
-
-    for (i = 0; i < NUMTHREAD; i++) {
-        pthread_join(thread[i], NULL);
-    }
 
     while (1) {
         sleep(1);

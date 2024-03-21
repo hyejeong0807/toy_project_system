@@ -1,48 +1,48 @@
-CC = gcc
-CFALGS = -g -Wall
-CXXLIBS = -lpthread -lm -lrt
-CXX = g++
-CXXFLAGS = $(INCLUDEDIRS) -g -O0 -std=c++14
-
 TARGET = toy_system
 
+SYSTEM = ./system
+UI = ./ui
+WEB_SERVER = ./web_server
 HAL = ./hal
-INCLUDES = -I./ -I./system -I./ui -I./web_server -I$(HAL)
 
-OBJS = main.o \
-       system_server.o \
-	   gui.o \
-       input.o \
-	   web_server.o
+INCLUDES = -I$(SYSTEM) -I$(UI) -I$(WEB_SERVER) -I$(HAL) -I./
 
-CXX_OBJS = camera_HAL.o ControlThread.o
+CC = gcc
+CXXLIBS = -lpthread -lm -lrt
+CXXFLAGS = $(INCLUDEDIRS) -g -O0 -std=c++14
+CXX = g++
 
-.PHONY: clean
+objects = main.o system_server.o web_server.o input.o gui.o shared_memory.o
+cxx_objects = camera_HAL.o ControlThread.o
 
-$(TARGET): $(OBJS) $(CXX_OBJS)
-	$(CC) -o $(TARGET) $(OBJS) $(CXX_OBJS) $(CXXLIBS)
+$(TARGET): $(objects) $(cxx_objects)
+	$(CXX) -o $(TARGET) $(objects) $(cxx_objects) $(CXXLIBS)
 
-main.o: main.c
-	$(CC) $(CFALGS) $(INCLUDES) -c main.c
+main.o:  main.c
+	$(CC) -g $(INCLUDES) -c main.c
 
-system_server.o: ./system/system_server.h ./system/system_server.c
-	$(CC) $(CFALGS) $(INCLUDES) -c ./system/system_server.c
+system_server.o: $(SYSTEM)/system_server.h $(SYSTEM)/system_server.c
+	$(CC) -g $(INCLUDES) -c ./system/system_server.c
 
-gui.o: ./ui/gui.h ./ui/gui.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c ./ui/gui.c
+shared_memory.o: $(SYSTEM)/shared_memory.h $(SYSTEM)/shared_memory.c
+	$(CC) -g $(INCLUDES) -c ./system/shared_memory.c
 
-input.o: ./ui/input.h ./ui/input.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c ./ui/input.c
+gui.o: $(UI)/gui.h $(UI)/gui.c
+	$(CC) -g $(INCLUDES) -c $(UI)/gui.c
 
-web_server.o: ./web_server/web_server.h ./web_server/web_server.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c ./web_server/web_server.c
+input.o: $(UI)/input.h $(UI)/input.c
+	$(CC) -g $(INCLUDES) -c $(UI)/input.c
+
+web_server.o: $(WEB_SERVER)/web_server.h $(WEB_SERVER)/web_server.c
+	$(CC) -g $(INCLUDES) -c $(WEB_SERVER)/web_server.c
 
 camera_HAL.o: $(HAL)/camera_HAL.cpp
-	$(CXX) -g $(INCLUDES) $(CXXFLAGS) -c $(HAL)/camera_HAL.cpp
+	$(CXX) -g $(INCLUDES) $(CXXFLAGS) -c  $(HAL)/camera_HAL.cpp
 
 ControlThread.o: $(HAL)/ControlThread.cpp
-	$(CXX) -g $(INCLUDES) $(CXXFLAGS) -c $(HAL)/ControlThread.cpp
+	$(CXX) -g $(INCLUDES) $(CXXFLAGS) -c  $(HAL)/ControlThread.cpp
 
+.PHONY: clean
 clean:
 	rm -rf *.o
 	rm -rf $(TARGET)
