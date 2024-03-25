@@ -11,6 +11,10 @@
 #include <semaphore.h>
 #include <error.h>
 #include <sys/inotify.h>
+#include <dirent.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/stat.h>
 
 #include <system_server.h>
 #include <gui.h>
@@ -152,6 +156,49 @@ void *monitor_thread(void *arg)
     return 0;
 }
 
+static long get_directory_size(char *dirname) 
+{
+    DIR *dir = opendir(dirname);
+    if (dir == 0)
+        return 0;
+
+    struct dirent *dit;
+    struct stat st;
+    long size = 0;
+    long total_size = 0;
+    char filePath[NAME_MAX];
+
+    while ((dit = readdir(dir)) != NULL)
+    {
+        if ( (strcmp(dit->d_name, ".") == 0) || (strcmp(dit->d_name, "..") == 0) )
+            continue;
+
+        sprintf(filePath, "%s/%s", dirname, dit->d_name);
+        if (lstat(filePath, &st) != 0)
+            continue;
+        size = st.st_size;
+
+        if (S_ISDIR(st.st_mode))
+        {
+            long dir_size = get_directory_size(filePath) + size;
+            printf("DIR\t");
+            printf("MODE: %lo\t", (unsigned long) st.st_mode);
+            printf("SIZE: %ld\t", dir_size);
+            printf("%s\n", filePath);
+            total_size += dir_size;
+        }
+        else
+        {
+            total_size += size;
+            printf("FILES\t");
+            printf("MODE: %lo\t", (unsigned long) st.st_mode);
+            printf("SIZE: %ld\t", size);
+            printf("%s\n", filePath);
+        }
+    }
+    return total_size;
+}
+
 #define WATCH_DIR "./fs"
 
 void *disk_thread(void *arg)
@@ -165,6 +212,7 @@ void *disk_thread(void *arg)
     int inotifyFd;
     struct inotify_event *event;
     int inoretcode;
+    int total = 0;
     char *p;
 
     printf("%s", s);
@@ -206,6 +254,8 @@ void *disk_thread(void *arg)
             }
             p += sizeof(struct inotify_event) + event->len;
         }
+        total = get_directory_size(WATCH_DIR);
+        printf("directory size: %d\n", total);
     }
     exit(EXIT_SUCCESS);
 }
