@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <semaphore.h>
 #include <error.h>
+#include <sys/inotify.h>
 
 #include <system_server.h>
 #include <gui.h>
@@ -151,42 +152,63 @@ void *monitor_thread(void *arg)
     return 0;
 }
 
+#define WATCH_DIR "./fs"
+
 void *disk_thread(void *arg)
 {
     char *s = arg;
     ssize_t numRead;
     unsigned int prio;
     toy_msg_t msg;
+    
+    // 파일 변경 감지
+    int inotifyFd;
+    struct inotify_event *event;
+    int inoretcode;
+    char *p;
+
     printf("%s", s);
 
     FILE *fd;
     char buf[BUFSIZE];
 
+    inotifyFd = inotify_init();        // Create inotify instance
+    if (inotifyFd == -1) {
+        perror("inotify_init error");
+        exit(-1);
+    }
+
+    inoretcode = inotify_add_watch(inotifyFd, WATCH_DIR, IN_CREATE);
+    if (inoretcode == -1) {
+        perror("inotify_add_watch error");
+        exit(-1);
+    }
+
     while (1) {
-        numRead = mq_receive(disk_queue, (char *)&msg, sizeof(toy_msg_t), &prio);
-        assert(numRead > 0);
-        printf("disk_thread: 메시지 수신 받음\n");
-        printf("Read %ld bytes: prioity = %u\n", (long)numRead, prio);
-        printf("msg.type: %d\n", msg.msg_type);
-        printf("msg.param1: %d\n", msg.param1);
-        printf("msg.param2: %d\n", msg.param2);
-        /*
-            popen 사용하여 10초마다 disk 잔여량 출력
-            popen으로 받은 fd를 읽어서 출력
-        */
-        if ((fd = popen("df -h ./", "r")) == NULL) {
-            perror("faild to open disk free");
+        numRead = read(inotifyFd, buf, BUFSIZE);
+        printf("num_read: %ld bytes\n", numRead);
+
+        if (numRead == 0) {
+            printf("read() from inotify fd returned 0!\n");
+            return 0;
+        }
+
+        if (numRead == -1) {
+            perror("read error");
             exit(-1);
         }
 
-        while (fgets(buf, BUFSIZE, fd)) {
-            printf("%s", buf);
+        for (p = buf; p < buf + numRead; ) {
+            event = (struct inotify_event *) p;
+            if (event->mask & IN_CREATE) {
+                printf("The file %s was created.\n", event->name);
+                break;
+            }
+            p += sizeof(struct inotify_event) + event->len;
         }
-
-        posix_sleep_ms(10000);
     }
+    exit(EXIT_SUCCESS);
 }
-
 
 #define CAMERA_TAKE_PICTURE 1
 
