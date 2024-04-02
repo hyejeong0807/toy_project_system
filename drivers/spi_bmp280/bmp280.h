@@ -1,0 +1,28 @@
+#ifndef BMP280
+#define BMP280
+
+#include <stdint.h>
+#include <stdio.h>
+
+#define BMP280_PRESS_MSB 0xF7
+#define BMP280_PRESS_LSB 0xF8
+#define BMP280_PRESS_XLSB 0xF9
+
+#define BMP280_TEMP_MSB 0xFA
+#define BMP280_TEMP_LSB 0xFB
+#define BMP280_TEMP_XLSB 0xFC
+
+#define BMP280_DIG_T1_REG 0x88
+#define BMP280_DIG_T2_REG 0x8A
+#define BMP280_DIG_T3_REG 0x8C
+#define BMP280_DIG_P1_REG 0x8E
+#define BMP280_DIG_P2_REG 0x90
+#define BMP280_DIG_P3_REG 0x92
+#define BMP280_DIG_P4_REG 0x94
+#define BMP280_DIG_P5_REG 0x96
+#define BMP280_DIG_P6_REG 0x98
+#define BMP280_DIG_P7_REG 0x9A
+#define BMP280_DIG_P8_REG 0x9C
+#define BMP280_DIG_P9_REG 0x9E
+
+#endif // BMP280
