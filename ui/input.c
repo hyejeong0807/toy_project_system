@@ -92,7 +92,8 @@ char *builtin_str[] = {
     "exit",
     "mu",  // mutex
     "mq",  // message queue
-    "elf"
+    "elf",
+    "dump"
 };
 
 // function table 정의
@@ -102,7 +103,8 @@ int (*builtin_func[]) (char **) = {
     &toy_exit,
     &toy_mutex,
     &toy_message_queue,
-    &toy_elf
+    &toy_elf,
+    &toy_dump
 };
 
 int toy_num_builtins()
@@ -305,6 +307,25 @@ void toy_loop(void)
         free(args);
     } while (status);
 }
+
+
+void toy_dump(void)
+{
+    int mqretcode;
+    toy_msg_t msg;
+
+    printf("commnad dump\n");
+
+    msg.msg_type = 2;  // DUMP STATE
+    msg.param1 = 0;
+    msg.param2 = 0;
+
+    mqretcode = mq_send(monitor_queue, (char *)&msg, sizeof(msg), 0);
+    assert(mqretcode == 0);
+
+    return 0;
+}
+
 
 void *command_thread(void *arg)
 {

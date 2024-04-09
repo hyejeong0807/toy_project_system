@@ -24,6 +24,7 @@
 #include <toy_message.h>
 #include <sensor_info.h>
 #include <shared_memory.h>
+#include <dump_state.h>
 
 #define BUFSIZE 1024
 
@@ -125,6 +126,7 @@ void *watchdog_thread(void *arg)
     shared memory를 사용해서 
 */
 #define SENSOR_DATA 1
+#define DUMP_STATE 2
 
 void *monitor_thread(void *arg)
 {
@@ -150,6 +152,12 @@ void *monitor_thread(void *arg)
             printf("sensor info: %d\n", bmp_shm_msg->press);
             printf("sensor humidity: %d\n", bmp_shm_msg->humidity);
             toy_shm_detach(bmp_shm_msg);           // 연결된 메모리 해제
+        }
+        else if (msg.msg_type == DUMP_STATE) {
+            dump_state();
+        }
+        else {
+            perror("[Monitor] unknown message type\n");
         }
     }
 
